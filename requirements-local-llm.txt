@@ -1,0 +1,5 @@
+# Optional: run an open-source Hugging Face model in-process (LLM_PROVIDER=transformers).
+# Not needed when using the Hugging Face Inference router (HF_TOKEN) or Ollama.
+-r requirements.txt
+torch>=2.3
+transformers>=4.45

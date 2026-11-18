@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Samsung Phone Assistant</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<style>
+  :root { --bg:#f6f7f9; --panel:#fff; --text:#1d2330; --muted:#667085; --line:#e4e7ec; --accent:#1f4fd8; --user:#e8efff; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12151b; --panel:#1b2029; --text:#e6e9ef; --muted:#98a2b3; --line:#2b3240; --accent:#7aa2ff; --user:#24304a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--text); }
+  .app { display:grid; grid-template-columns: 260px 1fr; height:100vh; }
+  aside { border-right:1px solid var(--line); background:var(--panel); overflow:auto; padding:16px; }
+  aside h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 8px; }
+  .phone { display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--line); font-size:14px; }
+  .phone button { font-size:12px; }
+  main { display:flex; flex-direction:column; min-width:0; }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); background:var(--panel); }
+  header h1 { font-size:18px; margin:0; }
+  header p { margin:2px 0 0; color:var(--muted); font-size:13px; }
+  #log { flex:1; overflow:auto; padding:20px; display:flex; flex-direction:column; gap:14px; }
+  .msg { max-width:900px; padding:12px 16px; border-radius:12px; background:var(--panel); border:1px solid var(--line); overflow-x:auto; }
+  .msg.user { align-self:flex-end; background:var(--user); }
+  .msg table { border-collapse:collapse; font-size:13px; margin:8px 0; }
+  .msg th, .msg td { border:1px solid var(--line); padding:4px 8px; text-align:left; vertical-align:top; }
+  .meta { color:var(--muted); font-size:12px; margin-top:8px; }
+  details { margin-top:6px; font-size:12px; color:var(--muted); }
+  details li { margin:2px 0; }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; padding:0 20px 10px; }
+  .chips button, .phone button { border:1px solid var(--line); background:var(--panel); color:var(--text); border-radius:999px; padding:4px 10px; cursor:pointer; }
+  form { display:flex; gap:8px; padding:12px 20px 20px; }
+  input { flex:1; padding:12px 14px; border-radius:10px; border:1px solid var(--line); background:var(--panel); color:var(--text); font-size:15px; }
+  form button { padding:0 18px; border-radius:10px; border:0; background:var(--accent); color:#fff; font-weight:600; cursor:pointer; }
+  @media (max-width: 760px) { .app { grid-template-columns: 1fr; } aside { display:none; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <h2>Phones in database</h2>
+    <div id="phones">Loading...</div>
+  </aside>
+  <main>
+    <header>
+      <h1>Samsung Phone Assistant</h1>
+      <p id="status">RAG chatbot + multi-agent reviews over GSMArena data</p>
+    </header>
+    <div id="log"></div>
+    <div class="chips" id="chips"></div>
+    <form id="form">
+      <input id="input" autocomplete="off" placeholder="Ask about Samsung phones..." autofocus>
+      <button>Send</button>
+    </form>
+  </main>
+</div>
+<script>
+const log = document.getElementById("log");
+let sessionId = null;
+const samples = [
+  "What are the camera specs of the Samsung Galaxy S23?",
+  "Which Samsung phone has the best battery life?",
+  "How does the Galaxy S23 compare to the S22 in terms of performance?",
+  "What is the screen size of the Galaxy S22?",
+  "Which phones have a stylus?",
+  "Best camera phone under $500?",
+];
+const render = (md) => (window.marked && window.DOMPurify) ? DOMPurify.sanitize(marked.parse(md)) : md.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])).replace(/\n/g, "<br>");
+
+function add(role, html, meta) {
+  const div = document.createElement("div");
+  div.className = "msg " + role;
+  div.innerHTML = html + (meta || "");
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+  return div;
+}
+
+function metaHtml(r) {
+  const v = r.verification || {};
+  const check = v.passed === undefined ? "" : (v.passed ? `fact-check passed (${v.checked} figures)` : `fact-check: ${v.unsupported.length} unsupported${v.fallback ? ", grounded fallback used" : ""}`);
+  const steps = (r.agents || []).map(a => `<li><b>${a.agent}</b> (${a.ms} ms): ${a.action}</li>`).join("");
+  return `<div class="meta">${r.intent ? "intent: " + r.intent + " · " : ""}${r.generator || ""} · ${check} · ${r.elapsed_ms} ms</div>` +
+         (steps ? `<details><summary>Agent trace</summary><ol>${steps}</ol></details>` : "");
+}
+
+async function ask(text) {
+  add("user", render(text));
+  const pending = add("bot", "<i>Thinking...</i>");
+  try {
+    const res = await fetch("/chat", {method: "POST", headers: {"Content-Type": "application/json"},
+                                      body: JSON.stringify({message: text, session_id: sessionId})});
+    const r = await res.json();
+    if (!res.ok) throw new Error(r.detail || res.statusText);
+    sessionId = r.session_id;
+    pending.innerHTML = render(r.answer) + metaHtml(r);
+  } catch (e) { pending.innerHTML = "Error: " + e.message; }
+  log.scrollTop = log.scrollHeight;
+}
+
+async function review(name) {
+  add("user", render(`Review the **${name}**`));
+  const pending = add("bot", "<i>Agents are working on the review...</i>");
+  try {
+    const res = await fetch("/reviews", {method: "POST", headers: {"Content-Type": "application/json"},
+                                         body: JSON.stringify({phone: name})});
+    const r = await res.json();
+    if (!res.ok) throw new Error(r.detail || res.statusText);
+    pending.innerHTML = render(r.review) + metaHtml(r);
+  } catch (e) { pending.innerHTML = "Error: " + e.message; }
+}
+
+document.getElementById("form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const input = document.getElementById("input");
+  const text = input.value.trim();
+  if (text) { input.value = ""; ask(text); }
+});
+
+const chips = document.getElementById("chips");
+samples.forEach(s => { const b = document.createElement("button"); b.textContent = s; b.onclick = () => ask(s); chips.appendChild(b); });
+
+fetch("/phones").then(r => r.json()).then(phones => {
+  const box = document.getElementById("phones");
+  box.innerHTML = "";
+  phones.forEach(p => {
+    const row = document.createElement("div");
+    row.className = "phone";
+    const name = p.name.replace("Samsung ", "");
+    row.innerHTML = `<span>${name}</span>`;
+    const btn = document.createElement("button");
+    btn.textContent = "Review";
+    btn.onclick = () => review(name);
+    row.appendChild(btn);
+    box.appendChild(row);
+  });
+});
+fetch("/health").then(r => r.json()).then(h => {
+  document.getElementById("status").textContent = `${h.phones} phones · ${h.rag_chunks} RAG chunks · embeddings: ${h.embedder} · LLM: ${h.llm}`;
+});
+add("bot", render("Hi! Ask me about specs, prices, comparisons or rankings of Samsung phones, or click **Review** next to a phone for a multi-agent review."));
+</script>
+</body>
+</html>

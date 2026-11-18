@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+.env.*
+!.env.example
+
+# the assignment brief itself
+Python Task.pdf
+
+# local database and scraped HTML cache (data/phones.json IS committed)
+data/*.db
+data/cache/
